@@ -1,0 +1,17 @@
+This study investigates the cellular heterogeneity of hepatic stellate cells (HSCs) and their role in liver fibrosis, a disease caused by chronic liver injury. A key question is whether HSCs exhibit functional uniformity or spatially zonated fibrogenic roles. Additionally, the study evaluates LPAR1 as a potential therapeutic target for fibrosis.
+
+Using a mouse (Mus musculus) model, the study examines gene expression in three mesenchymal cell types within the liver:
+1. **Hepatic stellate cells (HSCs)**
+2. **Fibroblasts (FBs)**
+3. **Vascular smooth muscle cells (VSMCs)**
+
+The experimental groups include:
+- **Healthy (uninjured) control mice** 
+- **Fibrotic mice treated with carbon tetrachloride (CCl₄) to induce liver fibrosis**
+- **LPAR1 inhibition group to evaluate the therapeutic impact of blocking LPAR1 in fibrosis progression**
+
+The study employs **single-cell RNA sequencing (scRNA-seq)** to analyze differential gene expression across these conditions.  
+- **Upregulated genes** in fibrotic livers correspond to disease-associated pro-fibrotic pathways.
+- **Downregulated genes** represent pathways active in healthy (wild-type, WT) states.
+
+The goal is to uncover key molecular mechanisms underlying liver fibrosis and assess whether LPAR1 inhibition alters disease progression. Identifying significantly enriched pathways will help determine whether fibrosis is driven by specific mesenchymal populations and how they might be therapeutically targeted.
