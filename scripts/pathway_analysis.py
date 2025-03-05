@@ -48,7 +48,13 @@ def process_gene_expression(file_path):
 
     print(f"[INFO] Found {len(df_upregulated)} upregulated genes and {len(df_downregulated)} downregulated genes.")
     
-    return df_upregulated, df_downregulated
+    # Sort by adjusted p-value first (ascending), then by absolute fold change (descending)
+    df_upregulated_sorted = df_upregulated.sort_values(by=['p_val_adj', 'avg_log2FC'], ascending=[True, False]).head(250)
+    df_downregulated_sorted = df_downregulated.sort_values(by=['p_val_adj', 'avg_log2FC'], ascending=[True, True]).head(250)
+    
+    print(f"[INFO] Found {len(df_upregulated_sorted)} upregulated genes and {len(df_downregulated_sorted)} downregulated genes after sorting and extracting top 250.")
+
+    return df_upregulated_sorted, df_downregulated_sorted
 
 
 def run_enrichr_analysis(gene_list, organism, regulation_type):
@@ -62,8 +68,8 @@ def run_enrichr_analysis(gene_list, organism, regulation_type):
         outdir=None  # Do not write to disk
     )
     
-    # Filter results by Adjusted P-value < 0.05
-    enr_df = enr.results[enr.results['Adjusted P-value'] < 0.05]
+    enr_df = enr.results
+
     enr_df.drop(columns=['Overlap', 'Old P-value', 'Old Adjusted P-value'], inplace=True)
 
     print(f"[INFO] Found {len(enr_df)} significantly enriched pathways for {regulation_type} genes.")
@@ -154,6 +160,7 @@ def main(args):
     # Set up LlamaIndex
     print("[INFO] Setting up LLM and embedding model...")
     os.environ["GROQ_API_KEY"] = groq_api_key
+    # make it a user parameter
     llm = Groq(model="deepseek-r1-distill-qwen-32b")
     Settings.llm = llm
     embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
@@ -174,6 +181,7 @@ def main(args):
 
         <task>
         1. **Identify Relevant Pathways**:
+        - change the prompt here for a more generic 2 conditions. be quite general. user defined parameters.
         - Based on the upregulated (disease-associated) and downregulated (healthy/WT) genes, determine key biological pathways enriched in the experimental conditions.
         - Highlight shifts in pathway activity across experimental groups, considering the study's biological focus.
 
