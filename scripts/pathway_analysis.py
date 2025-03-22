@@ -12,32 +12,58 @@ warnings.filterwarnings("ignore", message=".*clean_up_tokenization_spaces.*")
 
 
 def detect_input_files(input_dir):
-    """Automatically detect the Excel file and context text file from the input directory."""
-    excel_file = None
+    """Automatically detect all gene expression files (.xlsx or .csv) and a context text file from the input directory."""
+    gene_expression_files = []
     context_file = None
 
     for file in os.listdir(input_dir):
-        if file.endswith(".xlsx") and not excel_file:
-            excel_file = os.path.join(input_dir, file)
+        if file.startswith("de_results_") and file.endswith((".xlsx", ".csv")):
+            gene_expression_files.append(os.path.join(input_dir, file))
         elif file.endswith(".txt") and not context_file:
             context_file = os.path.join(input_dir, file)
 
-    if not excel_file:
-        raise FileNotFoundError("Error: No Excel (.xlsx) file found in the input directory.")
+    if not gene_expression_files:
+        raise FileNotFoundError("Error: No gene expression files found starting with 'de_results_' in the input directory.")
     if not context_file:
         raise FileNotFoundError("Error: No context (.txt) file found in the input directory.")
 
-    return excel_file, context_file
+    return gene_expression_files, context_file
 
 
-def process_gene_expression(file_path):
+def process_gene_expression(file_path, top_genes):
     """Load and filter gene expression data from an Excel file."""
     print("[INFO] Loading gene expression data...")
-    df = pd.read_excel(file_path)
+    # Read based on file extension
+    if file_path.endswith(".csv"):
+        df = pd.read_csv(file_path)
+    elif file_path.endswith(".xlsx"):
+        df = pd.read_excel(file_path)
+    else:
+        raise ValueError("Unsupported file type. Please provide a .csv or .xlsx file.")
     
     # Select relevant columns
-    selected_cols = ['gene', 'avg_log2FC', 'p_val_adj']
+    # Flexible column mapping
+    col_mapping = {
+        'gene': ['gene', 'names', 'genes'],
+        'avg_log2FC': ['avg_log2FC', 'logfoldchanges', 'log2FC'],
+        'p_val_adj': ['p_val_adj', 'pvals_adj', 'p_vals_adj']
+    }
+
+    mapped_cols = {}
+    for key, options in col_mapping.items():
+        for col in options:
+            if col in df.columns:
+                mapped_cols[key] = col
+                break
+        if key not in mapped_cols:
+            raise ValueError(f"Missing required column for '{key}'. Acceptable options: {options}")
+
+    # Select relevant columns
+    selected_cols = [mapped_cols['gene'], mapped_cols['avg_log2FC'], mapped_cols['p_val_adj']]
     df_selected = df[selected_cols]
+
+    # check here later on for avg_log2FC column name
+    df_selected.columns = ['gene', 'avg_log2FC', 'p_val_adj']  # Rename for internal consistency
     
     # Filter for statistical significance (p_val_adj < 0.05)
     df_significant = df_selected[df_selected['p_val_adj'] < 0.05]
@@ -49,10 +75,10 @@ def process_gene_expression(file_path):
     print(f"[INFO] Found {len(df_upregulated)} upregulated genes and {len(df_downregulated)} downregulated genes.")
     
     # Sort by adjusted p-value first (ascending), then by absolute fold change (descending)
-    df_upregulated_sorted = df_upregulated.sort_values(by=['p_val_adj', 'avg_log2FC'], ascending=[True, False]).head(250)
-    df_downregulated_sorted = df_downregulated.sort_values(by=['p_val_adj', 'avg_log2FC'], ascending=[True, True]).head(250)
+    df_upregulated_sorted = df_upregulated.sort_values(by=['p_val_adj', 'avg_log2FC'], ascending=[True, False]).head(top_genes)
+    df_downregulated_sorted = df_downregulated.sort_values(by=['p_val_adj', 'avg_log2FC'], ascending=[True, True]).head(top_genes)
     
-    print(f"[INFO] Found {len(df_upregulated_sorted)} upregulated genes and {len(df_downregulated_sorted)} downregulated genes after sorting and extracting top 250.")
+    print(f"[INFO] Found {len(df_upregulated_sorted)} upregulated genes and {len(df_downregulated_sorted)} downregulated genes after sorting and extracting top {top_genes}.")
 
     return df_upregulated_sorted, df_downregulated_sorted
 
@@ -143,73 +169,82 @@ def main(args):
         raise ValueError("[ERROR] GROQ_API_KEY is not set. Please export it as an environment variable.")
 
     # Detect input files
-    excel_file, context_file = detect_input_files(args.input_dir)
+    gene_expression_files, context_file = detect_input_files(args.input_dir)
 
-    # Load gene expression data
-    df_upregulated, df_downregulated = process_gene_expression(excel_file)
-
-    # Run Enrichr analysis
-    up_regulated_enr_df = run_enrichr_analysis(df_upregulated, args.organism, "Upregulated")
-    down_regulated_enr_df = run_enrichr_analysis(df_downregulated, args.organism, "Downregulated")
-
-    # Convert DataFrames to structured text
-    upregulated_text = dataframe_to_text(up_regulated_enr_df, "Upregulated")
-    downregulated_text = dataframe_to_text(down_regulated_enr_df, "Downregulated")
-    combined_text = f"{upregulated_text}\n\n{downregulated_text}"
-
-    # Set up LlamaIndex
-    print("[INFO] Setting up LLM and embedding model...")
-    os.environ["GROQ_API_KEY"] = groq_api_key
-    # make it a user parameter
-    llm = Groq(model="deepseek-r1-distill-qwen-32b")
-    Settings.llm = llm
-    embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
-
-    # Index data for RAG
-    indexing_status = index_enrichr_results(combined_text, llm, embed_model)
-    print(indexing_status)
-
-    # Load biological context from file
+    # Load biological context once
     biological_context = load_biological_context(context_file)
 
-    # Define structured query (unchanged)
-    query = f'''
-        This is my context for a single-cell RNA-seq study:
-        <start of context>
-        {biological_context}
-        <end of context>
+    # Create output directory if it doesn't exist
+    os.makedirs(args.output_dir, exist_ok=True)
 
-        <task>
-        1. **Identify Relevant Pathways**:
-        - change the prompt here for a more generic 2 conditions. be quite general. user defined parameters.
-        - Based on the upregulated (disease-associated) and downregulated (healthy/WT) genes, determine key biological pathways enriched in the experimental conditions.
-        - Highlight shifts in pathway activity across experimental groups, considering the study's biological focus.
+    for expression_file in gene_expression_files:
+        cell_type = os.path.splitext(os.path.basename(expression_file))[0].replace("de_results_", "")
 
-        2. **Stepwise Pathway Analysis**:
-        - **Step 1**: Identify pathways enriched in the disease condition and their functional roles.
-        - **Step 2**: Determine pathways that are suppressed in disease but enriched in healthy conditions.
-        - **Step 3**: Compare how a therapeutic intervention (if applicable) modulates pathway activation.
+        print(f"\n[INFO] Processing cell type: {cell_type}")
 
-        3. **Biological Insights**:
-        - Provide a structured interpretation of the molecular mechanisms driving the observed phenotype.
-        - Assess whether any pathway shifts suggest potential therapeutic targets or novel biological mechanisms.
-        - Highlight cell-type specificity in pathway activation (if applicable).
+        # Load gene expression data
+        df_upregulated, df_downregulated = process_gene_expression(expression_file, top_genes=args.top_genes)
 
-        4. **Summarized Output**:
-        - Present findings in a structured format.
-        - Ensure clarity, highlighting major takeaways relevant to the study's objectives.
-        </task>
-    '''
+        # Run Enrichr analysis
+        up_regulated_enr_df = run_enrichr_analysis(df_upregulated, args.organism, "Upregulated")
+        down_regulated_enr_df = run_enrichr_analysis(df_downregulated, args.organism, "Downregulated")
 
-    # Perform RAG-based query
-    response = perform_rag_query(query)
+        # Convert DataFrames to structured text
+        upregulated_text = dataframe_to_text(up_regulated_enr_df, "Upregulated")
+        downregulated_text = dataframe_to_text(down_regulated_enr_df, "Downregulated")
+        combined_text = f"{upregulated_text}\n\n{downregulated_text}"
 
-    # Save response
-    output_file_path = os.path.join(args.output_dir, "pathway_analysis_response.txt")
-    with open(output_file_path, "w", encoding="utf-8") as file:
-        file.write(response)
+        # Set up LlamaIndex
+        print("[INFO] Setting up LLM and embedding model...")
+        os.environ["GROQ_API_KEY"] = groq_api_key
+        llm = Groq(model="deepseek-r1-distill-qwen-32b")
+        Settings.llm = llm
+        embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-    print(f"[INFO] Analysis complete. Results saved to: {output_file_path}")
+        # Index data for RAG
+        indexing_status = index_enrichr_results(combined_text, llm, embed_model)
+        print(indexing_status)
+
+        # Define structured query (unchanged)
+        query = f'''
+            This is my context for a single-cell RNA-seq study:
+            <start of context>
+            {biological_context}
+            <end of context>
+
+            <task>
+            1. **Identify Relevant Pathways**:
+            - change the prompt here for a more generic 2 conditions. be quite general. user defined parameters.
+            - Based on the upregulated (disease-associated) and downregulated (healthy/WT) genes, determine key biological pathways enriched in the experimental conditions.
+            - Highlight shifts in pathway activity across experimental groups, considering the study's biological focus.
+
+            2. **Stepwise Pathway Analysis**:
+            - **Step 1**: Identify pathways enriched in the disease condition and their functional roles.
+            - **Step 2**: Determine pathways that are suppressed in disease but enriched in healthy conditions.
+            - **Step 3**: Compare how a therapeutic intervention (if applicable) modulates pathway activation.
+
+            3. **Biological Insights**:
+            - Provide a structured interpretation of the molecular mechanisms driving the observed phenotype.
+            - Assess whether any pathway shifts suggest potential therapeutic targets or novel biological mechanisms.
+            - Highlight cell-type specificity in pathway activation (if applicable).
+
+            4. **Summarized Output**:
+            - Present findings in a structured format.
+            - Ensure clarity, highlighting major takeaways relevant to the study's objectives.
+            </task>
+        '''
+
+        # Perform RAG-based query
+        response = perform_rag_query(query)
+
+        # Save response
+        output_file_name = f"{cell_type}_pathway_analysis_response.txt"
+        output_file_path = os.path.join(args.output_dir, output_file_name)
+
+        with open(output_file_path, "w", encoding="utf-8") as file:
+            file.write(response)
+
+        print(f"[INFO] Analysis for {cell_type} saved to: {output_file_path}")
 
 
 if __name__ == "__main__":
@@ -217,6 +252,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--input_dir", type=str, required=True, help="Directory containing input files (Excel & context text)")
     parser.add_argument("--output_dir", type=str, required=True, help="Directory to save the output results")
+    parser.add_argument("--top_genes", type=int, required=True, help="Number of top genes to select")
     parser.add_argument("--organism", type=str, default="human", help="Organism (default: human)")
 
     args = parser.parse_args()
