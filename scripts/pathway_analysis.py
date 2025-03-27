@@ -17,7 +17,7 @@ def detect_input_files(input_dir):
     context_file = None
 
     for file in os.listdir(input_dir):
-        if file.startswith("de_results_") and file.endswith((".xlsx", ".csv")):
+        if file.endswith((".xlsx", ".csv")):
             gene_expression_files.append(os.path.join(input_dir, file))
         elif file.endswith(".txt") and not context_file:
             context_file = os.path.join(input_dir, file)
@@ -44,7 +44,7 @@ def process_gene_expression(file_path, top_genes):
     # Select relevant columns
     # Flexible column mapping
     col_mapping = {
-        'gene': ['gene', 'names', 'genes'],
+        'gene': ['Gene', 'gene', 'names', 'genes'],
         'avg_log2FC': ['avg_log2FC', 'logfoldchanges', 'log2FC'],
         'p_val_adj': ['p_val_adj', 'pvals_adj', 'p_vals_adj']
     }
