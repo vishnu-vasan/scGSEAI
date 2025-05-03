@@ -4,7 +4,7 @@ This repository provides a streamlined pipeline for:
 - **Processing differential gene expression (DGE) data**  
 - **Performing pathway enrichment analysis using Enrichr**  
 - **Retrieval-Augmented Generation (RAG) with LlamaIndex**  
-- **Context-aware pathway interpretation using an LLM (Groq API)**  
+- **Context-aware pathway interpretation using an LLM (Groq API/Gemini)**  
 
 ---
 
@@ -12,7 +12,7 @@ This repository provides a streamlined pipeline for:
 
 ```
 pathway-analysis/
-│── input/                    # Input directory (Excel gene expression & context text file)
+│── input/                    # Input directory (Excel gene expression & context text file-optional)
 │── output/                   # Output directory (Enrichr & LLM results)
 │── scripts/                  # Main Python scripts
 │   ├── pathway_analysis.py   # Main script for enrichment & LLM analysis
@@ -36,28 +36,29 @@ pip install -r requirements.txt
 ```
 
 ### 3️⃣ **Set up the Environment Variable**
-Before running the script, export your Groq API key:
+Before running the script, export your Groq or GEMINI API key:
 ```bash
 export GROQ_API_KEY="your_groq_api_key_here"
+export GEMINI_API_KEY="your_gemini_api_key_here"
 ```
 Here is a short video on how to create a Groq API Key: [Groq API Key Setup](https://youtu.be/qbUELF9Et4s?si=5uMuxESOuqjaBiS4)
-
+Here is a short video on how to create a Gemini API Key: [Gemini API Key Setup](https://www.youtube.com/watch?v=T1BTyo1A4Ww)
 ---
 
 ## 🚀 **Running the Pipeline**
 
 ### **1️⃣ Prepare Input Files**
 - **Gene Expression Data:** A `.xlsx` file containing `gene`, `avg_log2FC`, and `p_val_adj` columns.
-- **Biological Context:** A `.txt` file describing the experiment/study background.
+- **Optional Biological Context:** A `.txt` file describing the experiment/study background. This can directly be added in the `pathway_analysis.py' file as well.
 
 ### **2️⃣ Run the Python Script**
 ```bash
-python scripts/pathway_analysis.py --input/ input --output output/ --organism human
+python scripts/pathway_analysis.py --input input --output output/ --organism human --top_genes 100 --llm gemini-2.0-flash --enrichr_dir enrichr_results
 ```
 
 ### **3️⃣ View Output**
-- Enrichment results will be saved in **`output/`**.
-- LLM-generated pathway analysis in **`pathway_analysis_response.txt`**.
+- Enrichr results will be saved in **`enrichr_dir/`**.
+- LLM-generated pathway analysis as **`pathway_analysis_response.txt`** in `output/`.
 
 ---
 
