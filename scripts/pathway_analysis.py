@@ -3,6 +3,10 @@ import os
 import warnings
 import pandas as pd
 import gseapy as gp
+from typing import Union
+import time
+# from llama_index.llms.google_genai import GoogleGenAI
+from llama_index.llms.gemini import Gemini
 from llama_index.core import VectorStoreIndex, Settings, Document
 from llama_index.llms.groq import Groq
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
@@ -10,6 +14,33 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 # Suppress irrelevant warnings
 warnings.filterwarnings("ignore", message=".*clean_up_tokenization_spaces.*")
 
+def get_env_variable(var_name: str) -> str:
+    """
+    Retrieve an environment variable or raise a detailed error.
+    """
+    value = os.getenv(var_name)
+    if not value:
+        raise EnvironmentError(f"[ERROR] Environment variable '{var_name}' is not set.")
+    return value
+
+def initialize_llm(model: str) -> Union[Gemini, Groq]:
+    """
+    Initialize and return the appropriate LLM based on the model name.
+    
+    Args:
+        model (str): The name of the model (e.g., "gemini-pro", "llama2-70b").
+
+    Returns:
+        An instance of either Google Gemini or Groq model.
+    """
+    if model.startswith("gemini"):
+        api_key = get_env_variable("GEMINI_API_KEY")
+        print(f"INFO: Using Gemini model: {model}")
+        return Gemini(model=f"models/{model}", api_key=api_key)
+    else:
+        api_key = get_env_variable("GROQ_API_KEY")
+        print(f"INFO: Using Groq model: {model}")
+        return Groq(model=model)
 
 def detect_input_files(input_dir):
     """Automatically detect all gene expression files (.xlsx or .csv) and a context text file from the input directory."""
@@ -24,11 +55,8 @@ def detect_input_files(input_dir):
 
     if not gene_expression_files:
         raise FileNotFoundError("Error: No gene expression files found starting with 'de_results_' in the input directory.")
-    if not context_file:
-        raise FileNotFoundError("Error: No context (.txt) file found in the input directory.")
 
     return gene_expression_files, context_file
-
 
 def process_gene_expression(file_path, top_genes):
     """Load and filter gene expression data from an Excel file."""
@@ -82,26 +110,34 @@ def process_gene_expression(file_path, top_genes):
 
     return df_upregulated_sorted, df_downregulated_sorted
 
-
 def run_enrichr_analysis(gene_list, organism, regulation_type):
     """Perform pathway enrichment analysis using Enrichr."""
-    print(f"[INFO] Running Enrichr analysis for {regulation_type} genes...")
-    
-    enr = gp.enrichr(
-        gene_list=gene_list['gene'].tolist(),
-        gene_sets=['GO_Biological_Process_2023'],
-        organism=organism,
-        outdir=None  # Do not write to disk
-    )
-    
-    enr_df = enr.results
+    if (not gene_list.empty):
+        print(f"[INFO] Running Enrichr analysis for {regulation_type} genes...")
+        enr = gp.enrichr(
+            gene_list=gene_list['gene'].tolist(),
+            gene_sets=['GO_Biological_Process_2023'],
+            organism=organism,
+            outdir=None  # Do not write to disk
+        )
+        
+        enr_df = enr.results
 
-    enr_df.drop(columns=['Overlap', 'Old P-value', 'Old Adjusted P-value'], inplace=True)
+        for col in ['Overlap', 'Old P-value', 'Old Adjusted P-value']:
+            if col in enr_df.columns:
+                enr_df.drop(columns=[col], inplace=True)
 
-    print(f"[INFO] Found {len(enr_df)} significantly enriched pathways for {regulation_type} genes.")
-    
-    return enr_df
+        # Sort the dataframe by Adjusted P-value
+        enr_df.sort_values(by='Adjusted P-value', ascending=True, inplace=True)
+        # filter for non significant adj p-vals
 
+        print(f"[INFO] Found {len(enr_df)} significantly enriched pathways for {regulation_type} genes.")
+        time.sleep(5)
+
+        return enr_df
+    else:
+        print(f"No genes in: {regulation_type} category")
+        return
 
 def dataframe_to_text(df, regulation_type):
     """Convert a DataFrame of enriched pathways into structured text."""
@@ -117,7 +153,6 @@ def dataframe_to_text(df, regulation_type):
         )
     return text_data.strip()
 
-
 def perform_rag_query(query):
     """Perform a query using the indexed Enrichr results."""
     global query_engine
@@ -130,7 +165,6 @@ def perform_rag_query(query):
         return str(response)
     except Exception as e:
         return f"[ERROR] Query processing failed: {str(e)}"
-
 
 def index_enrichr_results(text_data, llm, embed_model):
     """Index the Enrichr results for RAG-based querying."""
@@ -154,25 +188,23 @@ def index_enrichr_results(text_data, llm, embed_model):
     except Exception as e:
         return f"[ERROR] Indexing failed: {str(e)}"
 
-
 def load_biological_context(file_path):
     """Load biological context from a text file."""
     print("[INFO] Loading biological context...")
     with open(file_path, "r", encoding="utf-8") as file:
         return file.read().strip()
 
-
 def main(args):
-    # Check if GROQ_API_KEY is set
-    groq_api_key = os.getenv("GROQ_API_KEY")
-    if not groq_api_key:
-        raise ValueError("[ERROR] GROQ_API_KEY is not set. Please export it as an environment variable.")
+    
+    model_name = args.llm
+    llm = initialize_llm(model_name)
 
     # Detect input files
     gene_expression_files, context_file = detect_input_files(args.input_dir)
 
     # Load biological context once
-    biological_context = load_biological_context(context_file)
+    if context_file:
+        biological_context = load_biological_context(context_file)
 
     # Create output directory if it doesn't exist
     os.makedirs(args.output_dir, exist_ok=True)
@@ -182,76 +214,132 @@ def main(args):
 
         print(f"\n[INFO] Processing cell type: {cell_type}")
 
-        # Load gene expression data
-        df_upregulated, df_downregulated = process_gene_expression(expression_file, top_genes=args.top_genes)
+        try:
+            # Load gene expression data
+            df_upregulated, df_downregulated = process_gene_expression(expression_file, top_genes=args.top_genes)
 
-        # Run Enrichr analysis
-        up_regulated_enr_df = run_enrichr_analysis(df_upregulated, args.organism, "Upregulated")
-        down_regulated_enr_df = run_enrichr_analysis(df_downregulated, args.organism, "Downregulated")
+            # Run Enrichr analysis
+            up_regulated_enr_df = run_enrichr_analysis(df_upregulated, args.organism, "Upregulated")
+            down_regulated_enr_df = run_enrichr_analysis(df_downregulated, args.organism, "Downregulated")
 
-        # Convert DataFrames to structured text
-        upregulated_text = dataframe_to_text(up_regulated_enr_df, "Upregulated")
-        downregulated_text = dataframe_to_text(down_regulated_enr_df, "Downregulated")
-        combined_text = f"{upregulated_text}\n\n{downregulated_text}"
+            # Skip if both are None
+            if up_regulated_enr_df is None and down_regulated_enr_df is None:
+                print(f"[WARNING] No significant enrichment found for {cell_type}. Skipping...")
+                continue
 
-        # Set up LlamaIndex
-        print("[INFO] Setting up LLM and embedding model...")
-        os.environ["GROQ_API_KEY"] = groq_api_key
-        llm = Groq(model="deepseek-r1-distill-qwen-32b")
-        Settings.llm = llm
-        embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
+            # Create output directory for enrichr results if it doesn't exist
+            os.makedirs(args.enrichr_dir, exist_ok=True)
 
-        # Index data for RAG
-        indexing_status = index_enrichr_results(combined_text, llm, embed_model)
-        print(indexing_status)
+            # Save Enrichr Results
 
-        # Define structured query (unchanged)
-        query = f'''
-            This is my context for a single-cell RNA-seq study:
-            <start of context>
-            {biological_context}
-            <end of context>
+            if up_regulated_enr_df is not None:
+                up_regulated_enr_df.to_csv(f"{args.enrichr_dir}/{cell_type}_Upregulated_KO_Up_Enrichr_Results.csv", index=False)
+                print(f"[INFO] Saved Enrichr Results for Upregulated genes for {cell_type}.")
+            else:
+                print(f"[INFO] No Enrichr results for Upregulated genes for {cell_type}.")
 
-            <task>
-            1. **Identify Relevant Pathways**:
-            - change the prompt here for a more generic 2 conditions. be quite general. user defined parameters.
-            - Based on the upregulated (disease-associated) and downregulated (healthy/WT) genes, determine key biological pathways enriched in the experimental conditions.
-            - Highlight shifts in pathway activity across experimental groups, considering the study's biological focus.
+            if down_regulated_enr_df is not None:
+                down_regulated_enr_df.to_csv(f"{args.enrichr_dir}/{cell_type}_Downregulated_KO_Down_Enrichr_Results.csv", index=False)
+                print(f"[INFO] Saved Enrichr Results for Downregulated genes for {cell_type}.")
+            else:
+                print(f"[INFO] No Enrichr results for Downregulated genes for {cell_type}.")
 
-            2. **Stepwise Pathway Analysis**:
-            - **Step 1**: Identify pathways enriched in the disease condition and their functional roles.
-            - **Step 2**: Determine pathways that are suppressed in disease but enriched in healthy conditions.
-            - **Step 3**: Compare how a therapeutic intervention (if applicable) modulates pathway activation.
+            # Convert DataFrames to structured text
+            upregulated_text = dataframe_to_text(up_regulated_enr_df, "KO-Up")
+            downregulated_text = dataframe_to_text(down_regulated_enr_df, "KO-Down")
+            combined_text = f"{upregulated_text}\n\n{downregulated_text}"
 
-            3. **Biological Insights**:
-            - Provide a structured interpretation of the molecular mechanisms driving the observed phenotype.
-            - Assess whether any pathway shifts suggest potential therapeutic targets or novel biological mechanisms.
-            - Highlight cell-type specificity in pathway activation (if applicable).
+            if not combined_text:
+                print(f"[INFO] No pathway data to index for {cell_type}. Skipping RAG query.")
+                continue
 
-            4. **Summarized Output**:
-            - Present findings in a structured format.
-            - Ensure clarity, highlighting major takeaways relevant to the study's objectives.
-            </task>
-        '''
+            # # Set up LlamaIndex
+            print("[INFO] Setting up LLM and embedding model...")
+            Settings.llm = llm
+            embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-        # Perform RAG-based query
-        response = perform_rag_query(query)
+            # # Index data for RAG
+            indexing_status = index_enrichr_results(combined_text, llm, embed_model)
+            print(indexing_status)
 
-        # Save response
-        output_file_name = f"{cell_type}_pathway_analysis_response.txt"
-        output_file_path = os.path.join(args.output_dir, output_file_name)
+            # Define structured query (unchanged)
+            query = f'''
+                This is my context for a single-cell RNA-seq study focusing on a specific cell type within colon tissues:
+                <start of context>
+                The orphan nuclear receptor Nr4a1 (Nur77) has been implicated in regulating apoptosis, immune responses, and metabolic processes. Its possible dysregulation of Nr4a1 can be particularly relevant in cancer, where its improper function may lead to uncontrolled cell proliferation and defective apoptosis. Additionally, emerging evidence suggests Nr4a1 plays a role in aging and dietary responses, further underscoring its importance in maintaining homeostasis. To investigate the whole-body impact of Nr4a1 loss, we conducted a single-cell RNA sequencing (scRNA-seq) analysis of colon tissues from wild-type (WT) and Nr4a1 knockout (KO) mice.
+                
+                Our premise is that Nr4a1 is a 'bad guy' in the context of cancer, despite using healthy samples for this study. We are comparing gene expression in a specific cell type within the colon tissue of healthy Nr4a1 knockout (KO) mice versus healthy wild-type (WT) mice.
+                
+                The study employs **single-cell RNA sequencing (scRNA-seq)** to analyze differential gene expression within a specific **{cell_type}** cell population across these conditions.
+                
+                Rather than directly analyzing gene lists, we are using **Enrichr pathway enrichment results** from the top {args.top_genes} differentially expressed genes for both conditions:
 
-        with open(output_file_path, "w", encoding="utf-8") as file:
-            file.write(response)
+                - **KO-up pathways**: Enriched biological terms (e.g. pathways, GO terms) from Enrichr for genes **upregulated in Nr4a1 knockout (KO)** {cell_type} cells compared to WT.
+                - **KO-down pathways**: Enriched biological terms from Enrichr for genes **upregulated in wild-type (WT)** {cell_type} cells compared to KO.
 
-        print(f"[INFO] Analysis for {cell_type} saved to: {output_file_path}")
+                The pathways are ordered in ascending order of Adjusted P-Value.
 
+                Also, please let me know if there is anything unclear or potentially inaccurate in the biological context provided above.
+                
+                ***Enrichr Results***
+                {combined_text}
+                
+                <end of context>
+                
+                <task>
+                Given the Enrichr enrichment results that are sorted by adjusted p-values in ascending order and containing genes per term:
+                
+                1. **Identify Enriched Terms**:
+                    - List **only those** enriched biological terms with their adjusted p-values (e.g., pathways, Gene Ontology terms, etc.) associated with Nr4a1 knockout (KO) {cell_type} cells that are **statistically significant with adjusted p-values strictly less than 0.05**.
+                    - List **only those** enriched biological terms with their adjusted p-values (e.g., pathways, Gene Ontology terms, etc.) associated with wild-type (WT) {cell_type} cells that are **statistically significant with adjusted p-values strictly less than 0.05**.
+                    - **Exclude all terms with adjusted p-values ≥ 0.05**. If no terms meet the threshold, return "None found".
+                    
+                2. **Biological Insights**:
+                    - Discuss the potential functions or processes that are activated or suppressed due to Nr4a1 loss.
+                    - Highlight any implications for cancer biology, even in the healthy tissue context.
+                    - Assess whether any of the enriched terms suggest potential therapeutic targets or novel biological mechanisms relevant to Nr4a1 and its role in cellular function, potentially connecting to cancer.
+                
+                3. **Recurrent Genes in Enriched Terms**:
+                    - Identify the most **frequently occurring genes** across the statistically significant enriched terms listed in Section 1 for both KO-up and KO-down sets.
+                
+                4. **Summarized Output**:
+
+                    - **Top Enriched Terms (Refined Selection)**:  
+                        - From the **statistically significant enriched terms** identified in Section 1, present a **refined list** of top enriched biological terms for both KO-up and KO-down groups.  
+                        - The selection must consider **multiple criteria simultaneously**:
+                            - **Lower adjusted p-values** (greater statistical significance),
+                            - **Larger number of associated genes per term** (indicating broader pathway involvement),
+                            - **Reduction in redundancy**, especially among Gene Ontology (GO) terms (e.g., using semantic similarity or clustering heuristics to avoid listing overlapping terms).
+                        - The goal is to present a **concise, representative set** of enriched terms that **maximize biological informativeness** for each group.
+
+                    - **Biological Implications Summary**:  
+                        - Summarize the potential biological implications of these enriched terms in relation to the study's premise about Nr4a1.
+                </task>
+                '''
+
+            # Perform RAG-based query
+            response = perform_rag_query(query)
+
+            # Save response
+            output_file_name = f"{cell_type}_pathway_analysis_response.txt"
+            output_file_path = os.path.join(args.output_dir, output_file_name)
+
+            with open(output_file_path, "w", encoding="utf-8") as file:
+                file.write(response)
+
+            print(f"[INFO] Analysis for {cell_type} saved to: {output_file_path}")
+        
+        except Exception as e:
+            print(f"[ERROR] Failed to process {cell_type}: {e}")
+            continue
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Automated Pathway Analysis with Enrichr & RAG")
 
     parser.add_argument("--input_dir", type=str, required=True, help="Directory containing input files (Excel & context text)")
+    parser.add_argument("--enrichr_dir", type=str, required=True, help="Directory containing enrichr files")
     parser.add_argument("--output_dir", type=str, required=True, help="Directory to save the output results")
+    parser.add_argument("--llm", type=str, required=True, help="Which LLM to use", default="deepseek-r1-distill-qwen-32b")
     parser.add_argument("--top_genes", type=int, required=True, help="Number of top genes to select")
     parser.add_argument("--organism", type=str, default="human", help="Organism (default: human)")
 
