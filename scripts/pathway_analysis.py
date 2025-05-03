@@ -272,23 +272,11 @@ def main(args):
                 
                 The study employs **single-cell RNA sequencing (scRNA-seq)** to analyze differential gene expression within a specific **{cell_type}** cell population across these conditions.
                 
-                Rather than directly analyzing gene lists, we are using **Enrichr pathway enrichment results** from the top {args.top_genes} differentially expressed genes for both conditions:
-
-                - **KO-up pathways**: Enriched biological terms (e.g. pathways, GO terms) from Enrichr for genes **upregulated in Nr4a1 knockout (KO)** {cell_type} cells compared to WT.
-                - **KO-down pathways**: Enriched biological terms from Enrichr for genes **upregulated in wild-type (WT)** {cell_type} cells compared to KO.
-
-                The pathways are ordered in ascending order of Adjusted P-Value.
-
-                Also, please let me know if there is anything unclear or potentially inaccurate in the biological context provided above.
-                
-                ***Enrichr Results***
-                {combined_text}
-                
-                <end of context>
+                Enrichment analysis has already been performed externally via Enrichr using top {args.top_genes} differentially expressed genes for both conditions.
                 
                 <task>
-                Given the Enrichr enrichment results that are sorted by adjusted p-values in ascending order and containing genes per term:
-                
+                You have access to embedded pathway enrichment results from Enrichr for both KO-up and KO-down gene sets.
+
                 1. **Identify Enriched Terms**:
                     - List **only those** enriched biological terms with their adjusted p-values (e.g., pathways, Gene Ontology terms, etc.) associated with Nr4a1 knockout (KO) {cell_type} cells that are **statistically significant with adjusted p-values strictly less than 0.05**.
                     - List **only those** enriched biological terms with their adjusted p-values (e.g., pathways, Gene Ontology terms, etc.) associated with wild-type (WT) {cell_type} cells that are **statistically significant with adjusted p-values strictly less than 0.05**.
